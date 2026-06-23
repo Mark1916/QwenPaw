@@ -20,14 +20,15 @@ import {
 } from "@agentscope-ai/icons";
 import {
   useChatAnywhereSessionsState,
-  useChatAnywhereSessions,
   type IAgentScopeRuntimeWebUISession,
 } from "@agentscope-ai/chat";
 import { useTranslation } from "react-i18next";
 import type { ChatStatus } from "../../../../api/types/chat";
 import { chatApi } from "../../../../api/modules/chat";
 import sessionApi from "../../sessionApi";
+import { useCreateNewSession } from "../../hooks/useCreateNewSession";
 import { useCodingMode } from "../../../../stores/codingModeStore";
+import { useAgentStore } from "../../../../stores/agentStore";
 import ChatSessionItem from "../ChatSessionItem";
 import { getChannelLabel } from "../../../Control/Channels/components";
 import {
@@ -164,8 +165,9 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
   const location = useLocation();
   const sdkState = useChatAnywhereSessionsState();
   const { codingMode } = useCodingMode();
+  const { selectedAgent, setLastChatId } = useAgentStore();
 
-  const sdkActions = useChatAnywhereSessions();
+  const createNewSession = useCreateNewSession();
 
   // In embedded mode, maintain a local session list fetched directly from the
   // API so we don't depend on the SDK context tree (which lives inside
@@ -177,7 +179,6 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
   const sessions = props.embedded ? localSessions : sdkState.sessions;
   const { currentSessionId, setCurrentSessionId } = sdkState;
   const setSessions = props.embedded ? setLocalSessions : sdkState.setSessions;
-  const createSession = sdkActions.createSession;
   const { embedded, pinned, onClose } = props;
 
   /** Create a new session; close the drawer only when not pinned */
@@ -186,17 +187,14 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
       sessionApi.finishSessionSwitch();
     }
     if (embedded) {
-      // In embedded mode, we're outside the SDK context tree.
-      // Dispatch a DOM event so ChatSessionInitializer (inside the tree) handles it.
       window.dispatchEvent(new CustomEvent("qwenpaw:sidebar-new-chat"));
     } else {
-      await createSession();
-      // Only close the drawer (not the embedded panel) when not pinned
+      await createNewSession();
       if (!pinned) {
         onClose();
       }
     }
-  }, [createSession, onClose, pinned, embedded]);
+  }, [createNewSession, onClose, pinned, embedded]);
 
   /** ID of the session currently being renamed */
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -340,17 +338,22 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
       sessionApi
         .preloadSession(sessionId)
         .then(({ realId }) => {
+          const effectiveId = sessionApi.getEffectiveSessionId(
+            sessionId,
+            realId,
+          );
           // Issue #4987: In coding mode, skip URL navigation to /chat/<id>.
           // The redirect effect in ChatPage would immediately navigate back
           // to /coding before session data loads, causing the switch to fail.
-          // Instead, just set the session directly — the UI stays on /coding.
           if (!codingMode) {
-            const effectiveId = realId || sessionId;
             const targetUrl = buildSessionPath("chat", effectiveId);
-            sessionApi.lastNavigatedChatId = effectiveId;
             navigate(targetUrl, { replace: true });
           }
-          // Now set currentSessionId — the library's getSession will hit cache.
+          sessionApi.trackNavigatedSession(
+            effectiveId,
+            setLastChatId,
+            selectedAgent,
+          );
           setCurrentSessionId(sessionId);
         })
         .catch(() => {
@@ -379,6 +382,8 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
       setCurrentSessionId,
       navigate,
       codingMode,
+      selectedAgent,
+      setLastChatId,
       props.embedded,
     ],
   );
